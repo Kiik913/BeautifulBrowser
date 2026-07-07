@@ -3,7 +3,15 @@
 
 **BeautifulBrowser** is a modern, production‑quality desktop web browser built with **Python 3.12+** and **PySide6** (Qt for Python) with **QtWebEngine**. It features a sleek, glass‑morphism UI inspired by Arc, Edge, Zen Browser, and Windows 11 – but with its own original design.
 
-![BeautifulBrowser Screenshot](screenshot.png)
+<img width="1920" height="1031" alt="Screenshot 2026-07-07 153954" src="https://github.com/user-attachments/assets/11e9f456-cd44-4abd-9197-1b3fdc3bab42" />
+<img width="1920" height="1040" alt="Screenshot 2026-07-07 154009" src="https://github.com/user-attachments/assets/b7094e40-e0f4-4258-9b9f-b1ef8d07cb12" />
+<img width="1920" height="1038" alt="Screenshot 2026-07-07 154046" src="https://github.com/user-attachments/assets/a1fbdf88-2d89-4ec8-bb77-85e8e7b97493" />
+<img width="1920" height="1032" alt="Screenshot 2026-07-07 154108" src="https://github.com/user-attachments/assets/3b403c5e-dd55-4cd0-807b-6e989c88f3fc" />
+<img width="1915" height="1017" alt="Screenshot 2026-07-07 153744" src="https://github.com/user-attachments/assets/63c97265-e950-49d3-a0a5-c008847e8b82" />
+<img width="1920" height="1046" alt="Screenshot 2026-07-07 153822" src="https://github.com/user-attachments/assets/789232b3-9e2d-4fe8-9f36-217276e18644" />
+<img width="1920" height="1040" alt="Screenshot 2026-07-07 153900" src="https://github.com/user-attachments/assets/1e69f85c-0070-4d8a-9923-dfa2009f2464" />
+<img width="1920" height="1041" alt="Screenshot 2026-07-07 153918" src="https://github.com/user-attachments/assets/ac7b1379-81ca-454c-a810-b9fb0564be01" />
+
 
 ---
 
