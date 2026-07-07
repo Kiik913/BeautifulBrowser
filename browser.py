@@ -38,7 +38,7 @@ class BrowserPage(QWebEnginePage):
                 window.showNormal()
 
     def javaScriptConsoleMessage(self, level, message, line_number, source_id):
-        if level == QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorLevel:
+        if level == QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
             print(f"JS Error: {message} at {source_id}:{line_number}")
 
     def certificateError(self, error):
@@ -223,9 +223,16 @@ class Browser(QWidget):
         settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
         settings.setAttribute(QWebEngineSettings.ErrorPageEnabled, True)
 
+        # Force dark mode if enabled
+        if self.db and self.db.get_setting("force_dark_mode", "false") == "true":
+            settings.setAttribute(QWebEngineSettings.DarkMode, True)
+            settings.setAttribute(QWebEngineSettings.DarkModeInDownloadPainting, True)
+
     def setup_page(self):
         self.page = BrowserPage(self.profile, self)
         self.page.windowCloseRequested.connect(self.close_requested.emit)
+        # Connect link hover signal for status bar
+        self.page.linkHovered.connect(self.parent().window().show_status_message)
 
     def show_context_menu(self, pos: QPoint):
         menu = QMenu(self)
@@ -253,6 +260,32 @@ class Browser(QWidget):
 
         menu.addSeparator()
 
+        # Copy page title
+        title_action = QAction("📝 Copy Page Title", self)
+        title_action.triggered.connect(self.copy_title)
+        menu.addAction(title_action)
+
+        # Copy page URL
+        url_action = QAction("🔗 Copy Page URL", self)
+        url_action.triggered.connect(self.copy_url)
+        menu.addAction(url_action)
+
+        menu.addSeparator()
+
+        # ---- HIGHLIGHT & ADD NOTE (NEW) ----
+        highlight_action = QAction("✏️ Highlight & Add Note", self)
+        highlight_action.triggered.connect(self.highlight_selected_text)
+        menu.addAction(highlight_action)
+
+        menu.addSeparator()
+
+        # Page Info
+        info_action = QAction("ℹ️ Page Info", self)
+        info_action.triggered.connect(self.show_page_info)
+        menu.addAction(info_action)
+
+        menu.addSeparator()
+
         # Reading Mode toggle
         if self.page.reading_mode_active:
             reading_action = QAction("📖 Exit Reading Mode", self)
@@ -266,7 +299,7 @@ class Browser(QWidget):
         screenshot_action.triggered.connect(self.take_screenshot)
         menu.addAction(screenshot_action)
 
-        full_screenshot_action = QAction("📷 Screenshot (Full Page)", self)
+        full_screenshot_action = QAction("📷 Full Page Screenshot", self)
         full_screenshot_action.triggered.connect(self.take_full_screenshot)
         menu.addAction(full_screenshot_action)
 
@@ -300,29 +333,104 @@ class Browser(QWidget):
 
         menu.exec(self.web_view.mapToGlobal(pos))
 
+    # ---- Highlight & Add Note (NEW) ----
+    def highlight_selected_text(self):
+        """Get selected text and open the highlight dialog"""
+        self.web_view.page().runJavaScript("window.getSelection().toString();", self._handle_selected_text)
+
+    def _handle_selected_text(self, text):
+        if not text or not text.strip():
+            QMessageBox.information(self, "No Selection", "Please select some text on the page first.")
+            return
+        from highlight_dialog import HighlightDialog
+        dlg = HighlightDialog(text.strip(), self)
+        if dlg.exec():
+            note = dlg.get_note()
+            url = self.current_url
+            title = self.current_title
+            self.db.add_highlight(url, title, text.strip(), note)
+            QMessageBox.information(self, "Highlight Saved", "Your highlight and note have been saved.")
+
+    # ---- Other features ----
+    def copy_title(self):
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.clipboard().setText(self.current_title)
+
+    def copy_url(self):
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.clipboard().setText(self.current_url)
+
+    def show_page_info(self):
+        js = """
+        (function() {
+            var images = document.getElementsByTagName('img').length;
+            var links = document.getElementsByTagName('a').length;
+            var scripts = document.getElementsByTagName('script').length;
+            var styles = document.getElementsByTagName('link').length;
+            var size = document.documentElement.innerHTML.length;
+            return {
+                images: images,
+                links: links,
+                scripts: scripts,
+                styles: styles,
+                size: size
+            };
+        })();
+        """
+        self.web_view.page().runJavaScript(js, self._show_page_info_result)
+
+    def _show_page_info_result(self, result):
+        if not result:
+            return
+        title = self.current_title or "Untitled"
+        url = self.current_url or "about:blank"
+        images = result.get('images', 0)
+        links = result.get('links', 0)
+        scripts = result.get('scripts', 0)
+        styles = result.get('styles', 0)
+        size = result.get('size', 0)
+
+        info = f"""
+        <b>Page Info</b><br><br>
+        <b>Title:</b> {title}<br>
+        <b>URL:</b> {url}<br>
+        <b>Page size:</b> {size:,} characters<br>
+        <b>Images:</b> {images}<br>
+        <b>Links:</b> {links}<br>
+        <b>Scripts:</b> {scripts}<br>
+        <b>Stylesheets:</b> {styles}
+        """
+        QMessageBox.information(self, "Page Info", info)
+
+    def take_full_screenshot(self):
+        js = """
+        (function() {
+            var script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+            script.onload = function() {
+                html2canvas(document.body, {
+                    useCORS: true,
+                    scale: 1,
+                    allowTaint: false,
+                    backgroundColor: null
+                }).then(function(canvas) {
+                    var link = document.createElement('a');
+                    link.download = 'screenshot.png';
+                    link.href = canvas.toDataURL('image/png');
+                    link.click();
+                });
+            };
+            document.head.appendChild(script);
+        })();
+        """
+        self.web_view.page().runJavaScript(js)
+
     def toggle_reading_mode(self):
         self.page.toggle_reading_mode()
 
     def take_screenshot(self):
         pixmap = self.web_view.grab()
         self.save_screenshot(pixmap)
-
-    def take_full_screenshot(self):
-        self.web_view.page().runJavaScript("""
-            (function() {
-                return {
-                    width: document.documentElement.scrollWidth,
-                    height: document.documentElement.scrollHeight
-                };
-            })();
-        """, self._handle_full_screenshot)
-
-    def _handle_full_screenshot(self, result):
-        if result:
-            width = result.get('width', 1920)
-            height = result.get('height', 1080)
-            pixmap = self.web_view.grab()
-            self.save_screenshot(pixmap)
 
     def save_screenshot(self, pixmap):
         file_path, _ = QFileDialog.getSaveFileName(
