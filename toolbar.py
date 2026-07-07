@@ -39,6 +39,9 @@ class AddressBar(QLineEdit):
         self.lock_icon.setPixmap(QIcon(resource_path("resources/icons/lock.png")).pixmap(16, 16))
         self.lock_icon.hide()
         self.setTextMargins(25, 0, 0, 0)
+        # History suggestions
+        self.suggestions = []
+        self.completer = None
 
     def resizeEvent(self, event):
         self.lock_icon.move(5, (self.height() - 16) // 2)
@@ -107,6 +110,18 @@ class Toolbar(QWidget):
         self.address_bar = AddressBar(self)
         layout.addWidget(self.address_bar, 1)
 
+        # Zoom indicator
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setStyleSheet("""
+            QLabel {
+                color: palette(text);
+                font-size: 12px;
+                padding: 0 5px;
+                opacity: 0.7;
+            }
+        """)
+        layout.addWidget(self.zoom_label)
+
         # Bookmark button
         self.bookmark_btn = AnimatedButton("☆", self)
         self.bookmark_btn.setToolTip("Bookmark this page")
@@ -114,6 +129,14 @@ class Toolbar(QWidget):
         self.bookmark_btn.setStyleSheet(self.button_style())
         self.bookmark_btn.clicked.connect(self.toggle_bookmark)
         layout.addWidget(self.bookmark_btn)
+
+        # Undo close tab button
+        self.undo_btn = AnimatedButton("↩", self)
+        self.undo_btn.setToolTip("Restore Closed Tab")
+        self.undo_btn.setFixedSize(30, 30)
+        self.undo_btn.setStyleSheet(self.button_style())
+        self.undo_btn.clicked.connect(self.undo_close_tab)
+        layout.addWidget(self.undo_btn)
 
         # Menu button
         self.menu_btn = AnimatedButton("⋮", self)
@@ -141,17 +164,19 @@ class Toolbar(QWidget):
         """
 
     def set_browser(self, browser: Browser):
-        """Associate toolbar with a browser instance"""
         if self.browser:
             self.browser.url_changed.disconnect(self.on_url_changed)
             self.browser.load_progress.disconnect(self.on_load_progress)
             self.browser.load_finished.disconnect(self.on_load_finished)
+            self.browser.load_time_updated.disconnect(self.on_load_time_updated)
         self.browser = browser
         if browser:
             browser.url_changed.connect(self.on_url_changed)
             browser.load_progress.connect(self.on_load_progress)
             browser.load_finished.connect(self.on_load_finished)
+            browser.load_time_updated.connect(self.on_load_time_updated)
             self.on_url_changed(browser.get_current_url())
+            self.update_zoom_label()
 
     def on_url_changed(self, url: str):
         self.address_bar.set_url(url)
@@ -175,6 +200,15 @@ class Toolbar(QWidget):
     def on_load_finished(self, ok: bool):
         self.refresh_stop_btn.setText("⟳")
         self.refresh_stop_btn.setToolTip("Refresh")
+
+    def on_load_time_updated(self, time: float):
+        # Update zoom label (just a dummy, but we could show load time)
+        pass
+
+    def update_zoom_label(self):
+        if self.browser:
+            zoom = self.browser.web_view.zoomFactor() * 100
+            self.zoom_label.setText(f"{int(zoom)}%")
 
     def load_url(self, url: str):
         if self.browser:
@@ -212,6 +246,9 @@ class Toolbar(QWidget):
                 self.bookmark_btn.setText("★")
                 self.bookmark_btn.setToolTip("Remove bookmark")
 
+    def undo_close_tab(self):
+        self.parent().tab_widget.restore_closed_tab()
+
     def show_main_menu(self):
         menu = QMenu(self)
         menu.addAction("New Tab", lambda: self.window().tab_widget.new_tab())
@@ -221,9 +258,9 @@ class Toolbar(QWidget):
         menu.addAction("Bookmarks", lambda: self.window().on_sidebar_page_selected("bookmarks"))
         menu.addAction("Downloads", lambda: self.window().on_sidebar_page_selected("downloads"))
         menu.addSeparator()
-        menu.addAction("Zoom In", lambda: self.browser and self.browser.zoom_in())
-        menu.addAction("Zoom Out", lambda: self.browser and self.browser.zoom_out())
-        menu.addAction("Reset Zoom", lambda: self.browser and self.browser.zoom_reset())
+        menu.addAction("Zoom In", lambda: self.browser and self.browser.zoom_in() or self.update_zoom_label())
+        menu.addAction("Zoom Out", lambda: self.browser and self.browser.zoom_out() or self.update_zoom_label())
+        menu.addAction("Reset Zoom", lambda: self.browser and self.browser.zoom_reset() or self.update_zoom_label())
         menu.addSeparator()
         menu.addAction("Settings", lambda: self.window().on_sidebar_page_selected("settings"))
         menu.addAction("About", lambda: self.window().on_sidebar_page_selected("about"))
