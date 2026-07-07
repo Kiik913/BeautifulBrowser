@@ -1,5 +1,5 @@
 """
-Database - SQLite persistence for history, bookmarks, downloads, settings, themes, sessions
+Database - SQLite persistence for history, bookmarks, downloads, settings, themes, sessions, quick notes, reading list, highlights
 """
 
 import sqlite3
@@ -90,11 +90,39 @@ class Database:
                     is_custom BOOLEAN DEFAULT 0
                 )
             ''')
-            # Sessions table (for session manager)
+            # Sessions table
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     data TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL
+                )
+            ''')
+            # Quick notes table
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS quick_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT,
+                    timestamp INTEGER NOT NULL
+                )
+            ''')
+            # Reading list table
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS reading_list (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url TEXT NOT NULL,
+                    title TEXT,
+                    added INTEGER NOT NULL
+                )
+            ''')
+            # Highlights table (NEW)
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS highlights (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url TEXT NOT NULL,
+                    title TEXT,
+                    selected_text TEXT NOT NULL,
+                    note TEXT,
                     timestamp INTEGER NOT NULL
                 )
             ''')
@@ -115,12 +143,15 @@ class Database:
                 "block_popups": "true",
                 "dev_tools": "false",
                 "remote_debug": "false",
-                "ad_blocker": "true"
+                "ad_blocker": "true",
+                "history_editing": "false",
+                "show_bookmark_bar": "false",
+                "force_dark_mode": "false"
             }
             for key, value in default_settings.items():
                 cur.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, value))
 
-    # === History ===
+    # ---- History ----
     def add_history(self, url: str, title: str):
         with self._get_cursor() as cur:
             now = int(datetime.now().timestamp())
@@ -147,7 +178,7 @@ class Database:
         with self._get_cursor() as cur:
             cur.execute('DELETE FROM history WHERE url = ?', (url,))
 
-    # === Bookmarks ===
+    # ---- Bookmarks ----
     def add_bookmark(self, url: str, title: str = None, folder: str = None):
         with self._get_cursor() as cur:
             now = int(datetime.now().timestamp())
@@ -170,7 +201,12 @@ class Database:
             cur.execute('SELECT url, title, folder FROM bookmarks ORDER BY folder, title')
             return [(row['url'], row['title'], row['folder']) for row in cur.fetchall()]
 
-    # === Settings ===
+    def get_bookmarks_by_folder(self, folder: str) -> List[Tuple[str, str]]:
+        with self._get_cursor() as cur:
+            cur.execute('SELECT url, title FROM bookmarks WHERE folder = ? ORDER BY title', (folder,))
+            return [(row['url'], row['title']) for row in cur.fetchall()]
+
+    # ---- Settings ----
     def get_setting(self, key: str, default: Any = None) -> str:
         with self._get_cursor() as cur:
             cur.execute('SELECT value FROM settings WHERE key = ?', (key,))
@@ -202,12 +238,15 @@ class Database:
                 "block_popups": "true",
                 "dev_tools": "false",
                 "remote_debug": "false",
-                "ad_blocker": "true"
+                "ad_blocker": "true",
+                "history_editing": "false",
+                "show_bookmark_bar": "false",
+                "force_dark_mode": "false"
             }
             for key, value in default_settings.items():
                 cur.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, value))
 
-    # === Downloads ===
+    # ---- Downloads ----
     def add_download(self, url: str, file_path: str, total_size: int):
         with self._get_cursor() as cur:
             now = int(datetime.now().timestamp())
@@ -228,7 +267,7 @@ class Database:
             cur.execute('SELECT * FROM downloads ORDER BY start_time DESC')
             return [dict(row) for row in cur.fetchall()]
 
-    # === Themes ===
+    # ---- Themes ----
     def get_theme(self, name: str) -> Optional[str]:
         with self._get_cursor() as cur:
             cur.execute('SELECT stylesheet FROM themes WHERE name = ?', (name,))
@@ -242,16 +281,14 @@ class Database:
                 VALUES (?, ?, ?)
             ''', (name, stylesheet, 1 if is_custom else 0))
 
-    # === Sessions ===
+    # ---- Sessions ----
     def save_session(self, tabs: List[dict]) -> None:
-        """Save current tab session"""
         with self._get_cursor() as cur:
-            cur.execute('DELETE FROM sessions')  # Keep only latest session
+            cur.execute('DELETE FROM sessions')
             cur.execute('INSERT INTO sessions (data, timestamp) VALUES (?, ?)',
                        (json.dumps(tabs), int(datetime.now().timestamp())))
 
     def load_session(self) -> Optional[List[dict]]:
-        """Load saved tab session"""
         with self._get_cursor() as cur:
             cur.execute('SELECT data FROM sessions ORDER BY timestamp DESC LIMIT 1')
             row = cur.fetchone()
@@ -260,16 +297,12 @@ class Database:
         return None
 
     def get_browsing_stats(self) -> dict:
-        """Get browsing statistics"""
         with self._get_cursor() as cur:
-            # Total pages visited
             cur.execute('SELECT COUNT(*) FROM history')
             total_pages = cur.fetchone()[0]
-            # Pages visited today
             today_start = int(datetime.now().replace(hour=0, minute=0, second=0).timestamp())
             cur.execute('SELECT COUNT(*) FROM history WHERE timestamp >= ?', (today_start,))
             pages_today = cur.fetchone()[0]
-            # Most visited sites
             cur.execute('''
                 SELECT url, title, COUNT(*) as count
                 FROM history
@@ -283,3 +316,80 @@ class Database:
                 'pages_today': pages_today,
                 'most_visited': most_visited
             }
+
+    # ---- Quick Notes ----
+    def get_quick_notes(self) -> str:
+        with self._get_cursor() as cur:
+            cur.execute('SELECT content FROM quick_notes ORDER BY timestamp DESC LIMIT 1')
+            row = cur.fetchone()
+            return row['content'] if row else ""
+
+    def save_quick_notes(self, content: str):
+        with self._get_cursor() as cur:
+            now = int(datetime.now().timestamp())
+            cur.execute('INSERT INTO quick_notes (content, timestamp) VALUES (?, ?)', (content, now))
+
+    # ---- Reading List ----
+    def add_reading_item(self, url: str, title: str):
+        with self._get_cursor() as cur:
+            now = int(datetime.now().timestamp())
+            cur.execute('''
+                INSERT OR REPLACE INTO reading_list (url, title, added)
+                VALUES (?, ?, ?)
+            ''', (url, title, now))
+
+    def remove_reading_item(self, url: str):
+        with self._get_cursor() as cur:
+            cur.execute('DELETE FROM reading_list WHERE url = ?', (url,))
+
+    def get_reading_list(self) -> List[Tuple[str, str]]:
+        with self._get_cursor() as cur:
+            cur.execute('SELECT url, title FROM reading_list ORDER BY added DESC')
+            return [(row['url'], row['title']) for row in cur.fetchall()]
+
+    # ---- Highlights (NEW) ----
+    def add_highlight(self, url: str, title: str, selected_text: str, note: str = ""):
+        with self._get_cursor() as cur:
+            now = int(datetime.now().timestamp())
+            cur.execute('''
+                INSERT INTO highlights (url, title, selected_text, note, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (url, title, selected_text, note, now))
+
+    def get_highlights(self, limit: int = 1000) -> List[dict]:
+        with self._get_cursor() as cur:
+            cur.execute('''
+                SELECT id, url, title, selected_text, note, timestamp
+                FROM highlights
+                ORDER BY timestamp DESC LIMIT ?
+            ''', (limit,))
+            return [dict(row) for row in cur.fetchall()]
+
+    def delete_highlight(self, highlight_id: int):
+        with self._get_cursor() as cur:
+            cur.execute('DELETE FROM highlights WHERE id = ?', (highlight_id,))
+
+    def get_highlights_by_url(self, url: str) -> List[dict]:
+        with self._get_cursor() as cur:
+            cur.execute('''
+                SELECT id, selected_text, note, timestamp
+                FROM highlights
+                WHERE url = ?
+                ORDER BY timestamp DESC
+            ''', (url,))
+            return [dict(row) for row in cur.fetchall()]
+
+    def export_highlights(self) -> str:
+        """Return all highlights as a formatted text string"""
+        highlights = self.get_highlights()
+        if not highlights:
+            return "No highlights saved."
+        lines = []
+        for h in highlights:
+            lines.append(f"URL: {h['url']}")
+            lines.append(f"Title: {h['title'] or 'Untitled'}")
+            lines.append(f"Selected Text: {h['selected_text']}")
+            lines.append(f"Note: {h['note'] or '(no note)'}")
+            lines.append(f"Date: {datetime.fromtimestamp(h['timestamp']).strftime('%Y-%m-%d %H:%M')}")
+            lines.append("-" * 50)
+        return "\n".join(lines)
