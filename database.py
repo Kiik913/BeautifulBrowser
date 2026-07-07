@@ -1,395 +1,138 @@
 """
-Database - SQLite persistence for history, bookmarks, downloads, settings, themes, sessions, quick notes, reading list, highlights
+Bookmarks - Manage bookmarks with folders
 """
 
-import sqlite3
-import os
-import json
-from typing import List, Tuple, Optional, Any
-from datetime import datetime
-import threading
-from contextlib import contextmanager
+from PySide6.QtCore import Qt, QModelIndex, QSortFilterProxyModel
+from PySide6.QtGui import QStandardItemModel, QStandardItem, QIcon
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
+                               QTreeView, QLineEdit, QLabel, QMenu, QInputDialog,
+                               QMessageBox, QFileDialog)
+
+from database import Database
+from utils import resource_path
 
 
-class Database:
-    """Thread-safe database manager"""
+class BookmarksDialog(QDialog):
+    """Dialog to manage bookmarks"""
 
-    def __init__(self, db_path: str = None):
-        if db_path is None:
-            app_data = os.path.join(os.path.expanduser("~"), ".BeautifulBrowser")
-            os.makedirs(app_data, exist_ok=True)
-            self.db_path = os.path.join(app_data, "browser.db")
-        else:
-            self.db_path = db_path
+    def __init__(self, db: Database, parent=None):
+        super().__init__(parent)
+        self.db = db
+        self.setWindowTitle("Bookmarks")
+        self.resize(700, 450)
 
-        self._lock = threading.Lock()
-        self._init_db()
+        layout = QVBoxLayout(self)
 
-    @contextmanager
-    def _get_cursor(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        try:
-            yield cursor
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
-            conn.close()
+        # Toolbar
+        toolbar = QHBoxLayout()
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Search bookmarks...")
+        self.search_edit.textChanged.connect(self.filter_bookmarks)
+        toolbar.addWidget(self.search_edit)
 
-    def _init_db(self):
-        with self._get_cursor() as cur:
-            # History table
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    url TEXT NOT NULL,
-                    title TEXT,
-                    timestamp INTEGER NOT NULL,
-                    visits INTEGER DEFAULT 1
-                )
-            ''')
-            # Bookmarks table
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS bookmarks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    url TEXT NOT NULL UNIQUE,
-                    title TEXT,
-                    folder TEXT,
-                    added INTEGER NOT NULL
-                )
-            ''')
-            # Downloads table
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS downloads (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    url TEXT NOT NULL,
-                    file_path TEXT NOT NULL,
-                    file_name TEXT,
-                    total_size INTEGER,
-                    received_size INTEGER DEFAULT 0,
-                    status TEXT DEFAULT 'downloading',
-                    start_time INTEGER NOT NULL,
-                    end_time INTEGER
-                )
-            ''')
-            # Settings table
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT
-                )
-            ''')
-            # Themes table
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS themes (
-                    name TEXT PRIMARY KEY,
-                    stylesheet TEXT,
-                    is_custom BOOLEAN DEFAULT 0
-                )
-            ''')
-            # Sessions table
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS sessions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    data TEXT NOT NULL,
-                    timestamp INTEGER NOT NULL
-                )
-            ''')
-            # Quick notes table
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS quick_notes (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    content TEXT,
-                    timestamp INTEGER NOT NULL
-                )
-            ''')
-            # Reading list table
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS reading_list (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    url TEXT NOT NULL,
-                    title TEXT,
-                    added INTEGER NOT NULL
-                )
-            ''')
-            # Highlights table (NEW)
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS highlights (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    url TEXT NOT NULL,
-                    title TEXT,
-                    selected_text TEXT NOT NULL,
-                    note TEXT,
-                    timestamp INTEGER NOT NULL
-                )
-            ''')
-            # Insert default settings
-            default_settings = {
-                "startup_page": "0",
-                "homepage": "https://www.google.com",
-                "search_engine": "google",
-                "download_folder": os.path.expanduser("~/Downloads"),
-                "theme": "Light",
-                "accent_color": "#0078d4",
-                "wallpaper": "",
-                "random_wallpaper": "false",
-                "slideshow_enabled": "false",
-                "slideshow_interval": "5",
-                "font_size": "9",
-                "tracking_protection": "true",
-                "block_popups": "true",
-                "dev_tools": "false",
-                "remote_debug": "false",
-                "ad_blocker": "true",
-                "history_editing": "false",
-                "show_bookmark_bar": "false",
-                "force_dark_mode": "false"
-            }
-            for key, value in default_settings.items():
-                cur.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, value))
+        self.add_btn = QPushButton("Add Bookmark")
+        self.add_btn.clicked.connect(self.add_bookmark)
+        toolbar.addWidget(self.add_btn)
 
-    # ---- History ----
-    def add_history(self, url: str, title: str):
-        with self._get_cursor() as cur:
-            now = int(datetime.now().timestamp())
-            cur.execute('SELECT id FROM history WHERE url = ?', (url,))
-            row = cur.fetchone()
-            if row:
-                cur.execute('UPDATE history SET visits = visits + 1, timestamp = ? WHERE id = ?', (now, row['id']))
-            else:
-                cur.execute('INSERT INTO history (url, title, timestamp) VALUES (?, ?, ?)', (url, title, now))
+        self.import_btn = QPushButton("Import")
+        self.import_btn.clicked.connect(self.import_bookmarks)
+        toolbar.addWidget(self.import_btn)
 
-    def get_history(self, limit: int = 1000) -> List[Tuple[str, str, int]]:
-        with self._get_cursor() as cur:
-            cur.execute('''
-                SELECT url, title, timestamp FROM history
-                ORDER BY timestamp DESC LIMIT ?
-            ''', (limit,))
-            return [(row['url'], row['title'], row['timestamp']) for row in cur.fetchall()]
+        self.export_btn = QPushButton("Export")
+        self.export_btn.clicked.connect(self.export_bookmarks)
+        toolbar.addWidget(self.export_btn)
 
-    def clear_history(self):
-        with self._get_cursor() as cur:
-            cur.execute('DELETE FROM history')
+        layout.addLayout(toolbar)
 
-    def delete_history_item(self, url: str):
-        with self._get_cursor() as cur:
-            cur.execute('DELETE FROM history WHERE url = ?', (url,))
+        # Tree view
+        self.tree_view = QTreeView()
+        self.tree_view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree_view.customContextMenuRequested.connect(self.show_context_menu)
 
-    # ---- Bookmarks ----
-    def add_bookmark(self, url: str, title: str = None, folder: str = None):
-        with self._get_cursor() as cur:
-            now = int(datetime.now().timestamp())
-            cur.execute('''
-                INSERT OR REPLACE INTO bookmarks (url, title, folder, added)
-                VALUES (?, ?, ?, ?)
-            ''', (url, title, folder, now))
+        self.model = QStandardItemModel(0, 2, self)
+        self.model.setHorizontalHeaderLabels(["Name", "URL"])
+        self.proxy_model = QSortFilterProxyModel(self)
+        self.proxy_model.setSourceModel(self.model)
+        self.proxy_model.setFilterKeyColumn(0)
+        self.tree_view.setModel(self.proxy_model)
 
-    def remove_bookmark(self, url: str):
-        with self._get_cursor() as cur:
-            cur.execute('DELETE FROM bookmarks WHERE url = ?', (url,))
+        layout.addWidget(self.tree_view)
 
-    def is_bookmarked(self, url: str) -> bool:
-        with self._get_cursor() as cur:
-            cur.execute('SELECT id FROM bookmarks WHERE url = ?', (url,))
-            return cur.fetchone() is not None
+        self.load_bookmarks()
 
-    def get_all_bookmarks(self) -> List[Tuple[str, str, str]]:
-        with self._get_cursor() as cur:
-            cur.execute('SELECT url, title, folder FROM bookmarks ORDER BY folder, title')
-            return [(row['url'], row['title'], row['folder']) for row in cur.fetchall()]
+    def load_bookmarks(self):
+        self.model.removeRows(0, self.model.rowCount())
+        bookmarks = self.db.get_all_bookmarks()
+        for url, title, folder in bookmarks:
+            name_item = QStandardItem(title or url)
+            name_item.setData(url, Qt.UserRole)
+            url_item = QStandardItem(url)
+            folder_item = QStandardItem(folder or "Default")
+            self.model.appendRow([name_item, url_item, folder_item])
 
-    def get_bookmarks_by_folder(self, folder: str) -> List[Tuple[str, str]]:
-        with self._get_cursor() as cur:
-            cur.execute('SELECT url, title FROM bookmarks WHERE folder = ? ORDER BY title', (folder,))
-            return [(row['url'], row['title']) for row in cur.fetchall()]
+        self.tree_view.setColumnWidth(0, 300)
+        self.tree_view.setColumnWidth(1, 300)
 
-    # ---- Settings ----
-    def get_setting(self, key: str, default: Any = None) -> str:
-        with self._get_cursor() as cur:
-            cur.execute('SELECT value FROM settings WHERE key = ?', (key,))
-            row = cur.fetchone()
-            return row['value'] if row else default
+    def filter_bookmarks(self, text: str):
+        self.proxy_model.setFilterRegExp(text)
 
-    def set_setting(self, key: str, value: str):
-        with self._get_cursor() as cur:
-            cur.execute('''
-                INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)
-            ''', (key, value))
+    def add_bookmark(self):
+        url, ok = QInputDialog.getText(self, "Add Bookmark", "Enter URL:")
+        if ok and url:
+            title, ok2 = QInputDialog.getText(self, "Add Bookmark", "Enter title (optional):")
+            folder, ok3 = QInputDialog.getText(self, "Add Bookmark", "Folder name (optional, e.g. 'Bookmarks Bar'):")
+            if ok2 and ok3:
+                self.db.add_bookmark(url, title, folder if folder else None)
+                self.load_bookmarks()
 
-    def reset_settings(self):
-        with self._get_cursor() as cur:
-            cur.execute('DELETE FROM settings')
-            default_settings = {
-                "startup_page": "0",
-                "homepage": "https://www.google.com",
-                "search_engine": "google",
-                "download_folder": os.path.expanduser("~/Downloads"),
-                "theme": "Light",
-                "accent_color": "#0078d4",
-                "wallpaper": "",
-                "random_wallpaper": "false",
-                "slideshow_enabled": "false",
-                "slideshow_interval": "5",
-                "font_size": "9",
-                "tracking_protection": "true",
-                "block_popups": "true",
-                "dev_tools": "false",
-                "remote_debug": "false",
-                "ad_blocker": "true",
-                "history_editing": "false",
-                "show_bookmark_bar": "false",
-                "force_dark_mode": "false"
-            }
-            for key, value in default_settings.items():
-                cur.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, value))
+    def import_bookmarks(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Import Bookmarks", "", "HTML Files (*.html)")
+        if file_path:
+            try:
+                import bs4
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    soup = bs4.BeautifulSoup(f, 'html.parser')
+                    for a in soup.find_all('a'):
+                        url = a.get('href')
+                        title = a.text.strip()
+                        if url and title:
+                            self.db.add_bookmark(url, title)
+                self.load_bookmarks()
+            except ImportError:
+                QMessageBox.warning(self, "Error", "BeautifulSoup not installed. Cannot import.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to import: {e}")
 
-    # ---- Downloads ----
-    def add_download(self, url: str, file_path: str, total_size: int):
-        with self._get_cursor() as cur:
-            now = int(datetime.now().timestamp())
-            cur.execute('''
-                INSERT INTO downloads (url, file_path, total_size, start_time)
-                VALUES (?, ?, ?, ?)
-            ''', (url, file_path, total_size, now))
+    def export_bookmarks(self):
+        file_path, _ = QFileDialog.getSaveFileName(self, "Export Bookmarks", "bookmarks.html", "HTML Files (*.html)")
+        if file_path:
+            try:
+                bookmarks = self.db.get_all_bookmarks()
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write("<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<html>\n<head>\n<title>Bookmarks</title>\n</head>\n<body>\n")
+                    f.write("<h1>Bookmarks</h1>\n<dl>\n")
+                    for url, title, folder in bookmarks:
+                        if folder:
+                            f.write(f"<dt><h3>{folder}</h3></dt>\n")
+                        f.write(f"<dt><a href=\"{url}\">{title}</a></dt>\n")
+                    f.write("</dl>\n</body>\n</html>")
+                QMessageBox.information(self, "Export", "Bookmarks exported successfully.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to export: {e}")
 
-    def update_download(self, url: str, received_size: int, status: str):
-        with self._get_cursor() as cur:
-            cur.execute('''
-                UPDATE downloads SET received_size = ?, status = ?, end_time = ?
-                WHERE url = ?
-            ''', (received_size, status, int(datetime.now().timestamp()), url))
-
-    def get_downloads(self) -> List[dict]:
-        with self._get_cursor() as cur:
-            cur.execute('SELECT * FROM downloads ORDER BY start_time DESC')
-            return [dict(row) for row in cur.fetchall()]
-
-    # ---- Themes ----
-    def get_theme(self, name: str) -> Optional[str]:
-        with self._get_cursor() as cur:
-            cur.execute('SELECT stylesheet FROM themes WHERE name = ?', (name,))
-            row = cur.fetchone()
-            return row['stylesheet'] if row else None
-
-    def save_theme(self, name: str, stylesheet: str, is_custom: bool = False):
-        with self._get_cursor() as cur:
-            cur.execute('''
-                INSERT OR REPLACE INTO themes (name, stylesheet, is_custom)
-                VALUES (?, ?, ?)
-            ''', (name, stylesheet, 1 if is_custom else 0))
-
-    # ---- Sessions ----
-    def save_session(self, tabs: List[dict]) -> None:
-        with self._get_cursor() as cur:
-            cur.execute('DELETE FROM sessions')
-            cur.execute('INSERT INTO sessions (data, timestamp) VALUES (?, ?)',
-                       (json.dumps(tabs), int(datetime.now().timestamp())))
-
-    def load_session(self) -> Optional[List[dict]]:
-        with self._get_cursor() as cur:
-            cur.execute('SELECT data FROM sessions ORDER BY timestamp DESC LIMIT 1')
-            row = cur.fetchone()
-            if row:
-                return json.loads(row['data'])
-        return None
-
-    def get_browsing_stats(self) -> dict:
-        with self._get_cursor() as cur:
-            cur.execute('SELECT COUNT(*) FROM history')
-            total_pages = cur.fetchone()[0]
-            today_start = int(datetime.now().replace(hour=0, minute=0, second=0).timestamp())
-            cur.execute('SELECT COUNT(*) FROM history WHERE timestamp >= ?', (today_start,))
-            pages_today = cur.fetchone()[0]
-            cur.execute('''
-                SELECT url, title, COUNT(*) as count
-                FROM history
-                GROUP BY url
-                ORDER BY count DESC
-                LIMIT 10
-            ''')
-            most_visited = [(row['url'], row['title'], row['count']) for row in cur.fetchall()]
-            return {
-                'total_pages': total_pages,
-                'pages_today': pages_today,
-                'most_visited': most_visited
-            }
-
-    # ---- Quick Notes ----
-    def get_quick_notes(self) -> str:
-        with self._get_cursor() as cur:
-            cur.execute('SELECT content FROM quick_notes ORDER BY timestamp DESC LIMIT 1')
-            row = cur.fetchone()
-            return row['content'] if row else ""
-
-    def save_quick_notes(self, content: str):
-        with self._get_cursor() as cur:
-            now = int(datetime.now().timestamp())
-            cur.execute('INSERT INTO quick_notes (content, timestamp) VALUES (?, ?)', (content, now))
-
-    # ---- Reading List ----
-    def add_reading_item(self, url: str, title: str):
-        with self._get_cursor() as cur:
-            now = int(datetime.now().timestamp())
-            cur.execute('''
-                INSERT OR REPLACE INTO reading_list (url, title, added)
-                VALUES (?, ?, ?)
-            ''', (url, title, now))
-
-    def remove_reading_item(self, url: str):
-        with self._get_cursor() as cur:
-            cur.execute('DELETE FROM reading_list WHERE url = ?', (url,))
-
-    def get_reading_list(self) -> List[Tuple[str, str]]:
-        with self._get_cursor() as cur:
-            cur.execute('SELECT url, title FROM reading_list ORDER BY added DESC')
-            return [(row['url'], row['title']) for row in cur.fetchall()]
-
-    # ---- Highlights (NEW) ----
-    def add_highlight(self, url: str, title: str, selected_text: str, note: str = ""):
-        with self._get_cursor() as cur:
-            now = int(datetime.now().timestamp())
-            cur.execute('''
-                INSERT INTO highlights (url, title, selected_text, note, timestamp)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (url, title, selected_text, note, now))
-
-    def get_highlights(self, limit: int = 1000) -> List[dict]:
-        with self._get_cursor() as cur:
-            cur.execute('''
-                SELECT id, url, title, selected_text, note, timestamp
-                FROM highlights
-                ORDER BY timestamp DESC LIMIT ?
-            ''', (limit,))
-            return [dict(row) for row in cur.fetchall()]
-
-    def delete_highlight(self, highlight_id: int):
-        with self._get_cursor() as cur:
-            cur.execute('DELETE FROM highlights WHERE id = ?', (highlight_id,))
-
-    def get_highlights_by_url(self, url: str) -> List[dict]:
-        with self._get_cursor() as cur:
-            cur.execute('''
-                SELECT id, selected_text, note, timestamp
-                FROM highlights
-                WHERE url = ?
-                ORDER BY timestamp DESC
-            ''', (url,))
-            return [dict(row) for row in cur.fetchall()]
-
-    def export_highlights(self) -> str:
-        """Return all highlights as a formatted text string"""
-        highlights = self.get_highlights()
-        if not highlights:
-            return "No highlights saved."
-        lines = []
-        for h in highlights:
-            lines.append(f"URL: {h['url']}")
-            lines.append(f"Title: {h['title'] or 'Untitled'}")
-            lines.append(f"Selected Text: {h['selected_text']}")
-            lines.append(f"Note: {h['note'] or '(no note)'}")
-            lines.append(f"Date: {datetime.fromtimestamp(h['timestamp']).strftime('%Y-%m-%d %H:%M')}")
-            lines.append("-" * 50)
-        return "\n".join(lines)
+    def show_context_menu(self, pos):
+        index = self.tree_view.indexAt(pos)
+        if not index.isValid():
+            return
+        menu = QMenu(self)
+        delete_act = menu.addAction("Delete")
+        open_act = menu.addAction("Open in New Tab")
+        action = menu.exec(self.tree_view.viewport().mapToGlobal(pos))
+        if action == delete_act:
+            row = self.proxy_model.mapToSource(index).row()
+            url = self.model.item(row, 1).text()
+            self.db.remove_bookmark(url)
+            self.load_bookmarks()
+        elif action == open_act:
+            url = self.model.item(self.proxy_model.mapToSource(index).row(), 1).text()
+            self.parent().tab_widget.new_tab(url)
