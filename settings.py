@@ -80,6 +80,7 @@ class SettingsDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
+        # Startup
         group = QGroupBox("Startup")
         form = QFormLayout(group)
         self.startup_page_combo = QComboBox()
@@ -92,6 +93,7 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(group)
 
+        # Search engine
         group2 = QGroupBox("Search Engine")
         form2 = QFormLayout(group2)
         self.search_engine_combo = QComboBox()
@@ -99,6 +101,7 @@ class SettingsDialog(QDialog):
         form2.addRow("Default search engine:", self.search_engine_combo)
         layout.addWidget(group2)
 
+        # Downloads
         group3 = QGroupBox("Downloads")
         form3 = QFormLayout(group3)
         self.download_path_edit = QLineEdit()
@@ -110,6 +113,14 @@ class SettingsDialog(QDialog):
         hbox.addWidget(browse_btn)
         form3.addRow("Download location:", hbox)
         layout.addWidget(group3)
+
+        # ---- NEW: Weather city ----
+        group4 = QGroupBox("Weather")
+        form4 = QFormLayout(group4)
+        self.weather_city_edit = QLineEdit()
+        self.weather_city_edit.setPlaceholderText("Leave empty for auto‑detect, or type a city (e.g., London)")
+        form4.addRow("Weather city:", self.weather_city_edit)
+        layout.addWidget(group4)
 
         layout.addStretch()
         return widget
@@ -123,6 +134,7 @@ class SettingsDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
+        # Theme
         group = QGroupBox("Theme")
         form = QFormLayout(group)
         self.theme_combo = QComboBox()
@@ -139,6 +151,10 @@ class SettingsDialog(QDialog):
         accent_layout.addWidget(self.accent_color_btn)
         accent_layout.addWidget(self.accent_color_preview)
         form.addRow("Accent color:", accent_layout)
+
+        # Bookmark bar toggle
+        self.bookmark_bar_check = QCheckBox("Show bookmark bar")
+        form.addRow(self.bookmark_bar_check)
 
         layout.addWidget(group)
 
@@ -330,10 +346,12 @@ class SettingsDialog(QDialog):
         self.popup_check = QCheckBox("Block popups")
         form.addRow("Popups:", self.popup_check)
 
-        # ---- New setting ----
         self.history_editing_check = QCheckBox("Enable history editing (delete/clear)")
-        self.history_editing_check.setToolTip("If disabled, history will be view‑only.")
         form.addRow("History:", self.history_editing_check)
+
+        # Force dark mode
+        self.dark_mode_check = QCheckBox("Force dark mode on websites")
+        form.addRow("Dark mode:", self.dark_mode_check)
 
         layout.addWidget(group)
         layout.addStretch()
@@ -395,6 +413,9 @@ class SettingsDialog(QDialog):
         else:
             self.wallpaper_preview.setText("No wallpaper selected")
 
+        # ---- NEW: Weather city ----
+        self.weather_city_edit.setText(self.db.get_setting("weather_city", ""))
+
         self.random_wallpaper_check.setChecked(self.db.get_setting("random_wallpaper", "false") == "true")
         self.slideshow_check.setChecked(self.db.get_setting("slideshow_enabled", "false") == "true")
         self.slideshow_spin.setValue(int(self.db.get_setting("slideshow_interval", "5")))
@@ -405,8 +426,9 @@ class SettingsDialog(QDialog):
         self.popup_check.setChecked(self.db.get_setting("block_popups", "true") == "true")
         self.dev_tools_check.setChecked(self.db.get_setting("dev_tools", "false") == "true")
         self.remote_debug_check.setChecked(self.db.get_setting("remote_debug", "false") == "true")
-        # ---- Load new setting ----
         self.history_editing_check.setChecked(self.db.get_setting("history_editing", "false") == "true")
+        self.bookmark_bar_check.setChecked(self.db.get_setting("show_bookmark_bar", "false") == "true")
+        self.dark_mode_check.setChecked(self.db.get_setting("force_dark_mode", "false") == "true")
 
     def save_settings(self):
         self.db.set_setting("startup_page", str(self.startup_page_combo.currentIndex()))
@@ -426,11 +448,18 @@ class SettingsDialog(QDialog):
         self.db.set_setting("block_popups", "true" if self.popup_check.isChecked() else "false")
         self.db.set_setting("dev_tools", "true" if self.dev_tools_check.isChecked() else "false")
         self.db.set_setting("remote_debug", "true" if self.remote_debug_check.isChecked() else "false")
-        # ---- Save new setting ----
         self.db.set_setting("history_editing", "true" if self.history_editing_check.isChecked() else "false")
+        self.db.set_setting("show_bookmark_bar", "true" if self.bookmark_bar_check.isChecked() else "false")
+        self.db.set_setting("force_dark_mode", "true" if self.dark_mode_check.isChecked() else "false")
+        # ---- NEW: Weather city ----
+        self.db.set_setting("weather_city", self.weather_city_edit.text())
 
         self.theme_manager.load_theme(self.theme_combo.currentText())
         self.parent().apply_theme_and_wallpaper()
+        self.parent().update_bookmark_bar_visibility()
+        # Refresh weather widget if the method exists
+        if hasattr(self.parent(), 'refresh_weather'):
+            self.parent().refresh_weather()
         font = QFont("Segoe UI", self.font_size_spin.value())
         QApplication.setFont(font)
 
@@ -447,4 +476,7 @@ class SettingsDialog(QDialog):
             self.load_settings()
             self.theme_manager.load_theme("Light")
             self.parent().apply_theme_and_wallpaper()
+            self.parent().update_bookmark_bar_visibility()
+            if hasattr(self.parent(), 'refresh_weather'):
+                self.parent().refresh_weather()
             QMessageBox.information(self, "Success", "Settings restored to defaults!")
