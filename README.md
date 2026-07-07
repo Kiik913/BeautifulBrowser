@@ -12,6 +12,10 @@
 <img width="1920" height="1040" alt="Screenshot 2026-07-07 153900" src="https://github.com/user-attachments/assets/1e69f85c-0070-4d8a-9923-dfa2009f2464" />
 <img width="1920" height="1041" alt="Screenshot 2026-07-07 153918" src="https://github.com/user-attachments/assets/ac7b1379-81ca-454c-a810-b9fb0564be01" />
 
+**Wallper made by me and name is bauhaus-pattern Wallper and in the app free 4k wallper ready to damload**
+<img width="3083" height="1667" alt="bauhaus-pattern-2563" src="https://github.com/user-attachments/assets/518e3d51-c4cd-4f09-9307-a7f3ee1c210d" />
+<img width="3083" height="1667" alt="bauhaus-pattern-1039" src="https://github.com/user-attachments/assets/3d6a1d6d-bfdb-4d44-bd11-def68985ebd3" />
+
 
 ---
 
