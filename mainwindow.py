@@ -93,6 +93,24 @@ class MainWindow(QMainWindow):
         # Add content widget to main layout
         main_layout.addWidget(content_widget, 1)
 
+        # --- New Features ---
+        # Bookmark bar (if enabled)
+        self.bookmark_bar = self.create_bookmark_bar()
+        main_layout.addWidget(self.bookmark_bar)
+
+        # Status bar (for link preview)
+        self.status_bar = QLabel("")
+        self.status_bar.setStyleSheet("""
+            QLabel {
+                color: palette(text);
+                font-size: 12px;
+                padding: 2px 10px;
+                background: rgba(0,0,0,0.03);
+                border-top: 1px solid rgba(255,255,255,0.05);
+            }
+        """)
+        main_layout.addWidget(self.status_bar)
+
         # Apply theme + wallpaper
         self.apply_theme_and_wallpaper()
 
@@ -107,6 +125,9 @@ class MainWindow(QMainWindow):
 
         # Restore session
         self.restore_session()
+
+        # Show bookmark bar if enabled
+        self.update_bookmark_bar_visibility()
 
     def create_title_bar(self) -> QWidget:
         """Create custom title bar with window controls and theme toggle"""
@@ -272,9 +293,9 @@ class MainWindow(QMainWindow):
         active = self.tab_widget.current_browser()
         if active:
             title = active.get_current_title() or "New Tab"
-            self.title_label.setText(f"{title} - BeautifulBrowser")
+            self.title_label.setText(f"{title} - BeautifulBrowser ({count} tabs)")
         else:
-            self.title_label.setText("BeautifulBrowser")
+            self.title_label.setText(f"BeautifulBrowser ({count} tabs)")
 
     def apply_theme_and_wallpaper(self):
         style = self.theme_manager.get_current_stylesheet()
@@ -293,6 +314,8 @@ class MainWindow(QMainWindow):
         else:
             self.theme_toggle_btn.setText("☀️")
             self.theme_toggle_btn.setToolTip("Switch to Dark Theme")
+        # Update bookmark bar style
+        self.update_bookmark_bar_visibility()
 
     def set_wallpaper(self):
         random_wallpaper = self.db.get_setting("random_wallpaper", "false") == "true"
@@ -345,6 +368,51 @@ class MainWindow(QMainWindow):
         if random_path:
             self.db.set_setting("wallpaper", random_path)
             self.set_wallpaper()
+
+    def create_bookmark_bar(self) -> QWidget:
+        """Create bookmark bar showing bookmarks from 'Bookmarks Bar' folder"""
+        bar = QWidget()
+        bar.setObjectName("bookmarkBar")
+        bar.setFixedHeight(30)
+        bar.setStyleSheet("""
+            #bookmarkBar {
+                background: rgba(255,255,255,0.03);
+                border-bottom: 1px solid rgba(255,255,255,0.05);
+            }
+        """)
+        bar_layout = QHBoxLayout(bar)
+        bar_layout.setContentsMargins(5, 2, 5, 2)
+        bar_layout.setSpacing(4)
+
+        # Load bookmarks from "Bookmarks Bar" folder
+        bookmarks = self.db.get_bookmarks_by_folder("Bookmarks Bar")
+        for url, title in bookmarks:
+            btn = QPushButton(title or url)
+            btn.setFlat(True)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: transparent;
+                    color: palette(text);
+                    border: none;
+                    border-radius: 4px;
+                    padding: 2px 8px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background: rgba(255,255,255,0.1);
+                }
+            """)
+            btn.clicked.connect(lambda checked, u=url: self.load_url_in_new_tab(u))
+            bar_layout.addWidget(btn)
+
+        bar_layout.addStretch()
+        bar.hide()  # Initially hidden, show based on setting
+        return bar
+
+    def update_bookmark_bar_visibility(self):
+        """Show/hide bookmark bar based on setting"""
+        visible = self.db.get_setting("show_bookmark_bar", "false") == "true"
+        self.bookmark_bar.setVisible(visible)
 
     def create_dashboard(self) -> QWidget:
         from widgets import GlassFrame
@@ -540,7 +608,7 @@ class MainWindow(QMainWindow):
 
                 # Generate year options from 1900 to 9999 (max)
                 year_options = ""
-                for y in range(1900, 10000):  # <-- MAX YEAR = 9999
+                for y in range(1900, 10000):
                     selected = "selected" if y == current_year else ""
                     year_options += f'<option value="{y}" {selected}>{y}</option>'
 
@@ -971,3 +1039,10 @@ class MainWindow(QMainWindow):
         self.slideshow_timer.stop()
         self.clock_timer.stop()
         event.accept()
+
+    # ---- Status bar methods ----
+    def show_status_message(self, message: str):
+        self.status_bar.setText(message)
+
+    def clear_status_message(self):
+        self.status_bar.setText("")
