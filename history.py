@@ -5,8 +5,7 @@ History - History viewer with search and clear options
 from PySide6.QtCore import Qt, QDate, QDateTime, QSortFilterProxyModel, QModelIndex
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QIcon
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-                               QListView, QLineEdit, QLabel, QComboBox, QMenu,
-                               QMessageBox, QHeaderView, QTableView)
+                               QLineEdit, QMenu, QMessageBox, QHeaderView, QTableView)
 
 from database import Database
 from utils import resource_path
@@ -43,6 +42,8 @@ class HistoryDialog(QDialog):
         self.history_view.horizontalHeader().setStretchLastSection(True)
         self.history_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.history_view.customContextMenuRequested.connect(self.show_context_menu)
+        # Double‑click to open in new tab
+        self.history_view.doubleClicked.connect(self.on_double_click)
 
         self.model = QStandardItemModel(0, 3, self)
         self.model.setHorizontalHeaderLabels(["Title", "URL", "Date"])
@@ -78,27 +79,49 @@ class HistoryDialog(QDialog):
     def clear_all_history(self):
         # Check if editing is allowed
         if not self.is_editing_enabled():
-            QMessageBox.warning(self, "Restricted", "History editing is disabled. Enable it in Settings → Privacy.")
+            QMessageBox.warning(
+                self,
+                "Restricted",
+                "History editing is disabled. Enable it in Settings → Privacy → 'Enable history editing'."
+            )
             return
 
-        reply = QMessageBox.question(self, "Clear History", "Are you sure you want to clear all history?",
-                                     QMessageBox.Yes | QMessageBox.No)
+        reply = QMessageBox.question(
+            self,
+            "Clear History",
+            "Are you sure you want to clear all history?",
+            QMessageBox.Yes | QMessageBox.No
+        )
         if reply == QMessageBox.Yes:
             self.db.clear_history()
             self.load_history()
+
+    def on_double_click(self, index):
+        """Open the selected URL in a new tab"""
+        if not index.isValid():
+            return
+        # Map through proxy model
+        source_index = self.proxy_model.mapToSource(index)
+        url = self.model.item(source_index.row(), 1).text()
+        if url:
+            self.parent().tab_widget.new_tab(url)
 
     def show_context_menu(self, pos):
         index = self.history_view.indexAt(pos)
         if not index.isValid():
             return
         menu = QMenu(self)
-        delete_act = menu.addAction("Delete")
         open_act = menu.addAction("Open in New Tab")
+        delete_act = menu.addAction("Delete")
         action = menu.exec(self.history_view.viewport().mapToGlobal(pos))
 
         if action == delete_act:
             if not self.is_editing_enabled():
-                QMessageBox.warning(self, "Restricted", "History editing is disabled. Enable it in Settings → Privacy.")
+                QMessageBox.warning(
+                    self,
+                    "Restricted",
+                    "History editing is disabled. Enable it in Settings → Privacy → 'Enable history editing'."
+                )
                 return
             row = self.proxy_model.mapToSource(index).row()
             url = self.model.item(row, 1).text()
@@ -117,8 +140,9 @@ class HistoryDialog(QDialog):
         """Enable/disable clear button and context menu actions based on setting"""
         enabled = self.is_editing_enabled()
         self.clear_btn.setEnabled(enabled)
-        # The context menu will be handled in show_context_menu
+        # The context menu actions will be checked in show_context_menu
 
     def showEvent(self, event):
+        """Refresh state when dialog is shown"""
         super().showEvent(event)
         self.update_editing_state()
